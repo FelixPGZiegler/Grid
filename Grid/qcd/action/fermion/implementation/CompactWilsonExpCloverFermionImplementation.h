@@ -334,49 +334,46 @@ void CompactWilsonExpCloverFermion<Impl>::ImportGauge(const GaugeField& _Umu) {
   // Exponentiate
 
   double t6 = usecond();
-  Exponentiate(Diagonal,
-               Triangle,
-  			   DiagonalExp,
-  			   TriangleExp,
-  			   1.0 / this->diag_mass);
+  CompactHelpers::Exponentiate(Diagonal,
+                               Triangle,
+                               DiagonalExp,
+                               TriangleExp,
+                               1.0 / this->diag_mass);
 
   // ToDo: Does this work?
   DiagonalExp *= this->diag_mass;
   TriangleExp *= this->diag_mass;
 
   // Add twisted mass
+  typedef typename SiteCloverDiagonal::scalar_object scalar_object_diagonal;
 
   double t7 = usecond();
-  GridBase* grid = DiagonalExp.Grid();
-  long lsites = grid->lSites();
+  long lsites = DiagonalExp.Grid()->lSites();
   autoView(T_v,  DiagonalExp,  CpuRead);
   autoView(DiagonalExp_v, DiagonalExp, CpuWrite);
 
-
   thread_for(site, lsites,
-    {
+  {
+    scalar_object_diagonal diagonal_src = Zero();
+    scalar_object_diagonal diagonal_dst = Zero();
 
-     scalar_object_diagonal diagonal_src = Zero();
-     scalar_object_diagonal diagonal_dst = Zero();
+    Coordinate lcoor;
+    grid->LocalIndexToLocalCoor(site, lcoor);
 
-     Coordinate lcoor;
-     grid->LocalIndexToLocalCoor(site, lcoor);
+    peekLocalSite(diagonal_src, T_v, lcoor);
+    ComplexD sum;
 
-     peekLocalSite(diagonal_src, T_v, lcoor);
-     Complex D sum;
+    for(int i = 0; i < 6; i++){
+      sum = static_cast<ComplexD>(TensorRemove(diagonal_src()(0)(i))) + timesI(static_cast<ComplexD>(twmass));
+      diagonal_dst()(0)(i) = sum;
 
-     for(int i = 0; i < 6; i++){
+      sum = static_cast<ComplexD>(TensorRemove(diagonal_src()(1)(i))) - timesI(static_cast<ComplexD>(twmass));
+      diagonal_dst()(1)(i) = sum;
+    }
 
-    	sum = static_cast<ComplexD>(TensorRemove(diagonal_src()(0)(i))) + timesI(twmass);
-    	diagonal_dst()(0)(i) = sum;
+   pokeLocalSite(diagonal_dst, DiagonalExp_v, lcoor);
 
-    	sum = static_cast<ComplexD>(TensorRemove(diagonal_src()(1)(i))) - timesI(twmass);
-    	diagonal_dst()(1)(i) = sum;
-     }
-
-     pokeLocalSite(diagonal_dst, DiagonalExp_v, lcoor);
-
-    });
+  });
 
   // Invert the clover term in the improved layout
   double t8 = usecond();
