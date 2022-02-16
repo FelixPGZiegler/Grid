@@ -519,7 +519,7 @@ public:
                      CloverTriangleField&       triangleInv) {
     conformable(diagonal, diagonalInv);
     conformable(triangle, triangleInv);
-    conformable(diagonal, triangle);(double)
+    conformable(diagonal, triangle);
 
     diagonalInv.Checkerboard() = diagonal.Checkerboard();
     triangleInv.Checkerboard() = triangle.Checkerboard();
