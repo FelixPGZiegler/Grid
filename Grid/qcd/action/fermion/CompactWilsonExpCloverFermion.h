@@ -121,7 +121,6 @@ public:
 			    GridCartesian& Fgrid,
 			    GridRedBlackCartesian& Hgrid,
 			    const RealD _mass,
-				const RealD _twmass,
 			    const RealD _csw_r = 0.0,
 			    const RealD _csw_t = 0.0,
 			    const RealD _cF = 1.0,
@@ -224,7 +223,6 @@ public:
   RealD csw_r;
   RealD csw_t;
   RealD cF;
-  RealD twmass; // Twisted-mass
 
   bool open_boundaries;
 

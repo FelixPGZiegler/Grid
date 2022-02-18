@@ -38,7 +38,6 @@ CompactWilsonExpCloverFermion<Impl>::CompactWilsonExpCloverFermion(GaugeField& _
                                                              GridCartesian& Fgrid,
                                                              GridRedBlackCartesian& Hgrid,
                                                              const RealD _mass,
-															 const RealD _twmass,
                                                              const RealD _csw_r,
                                                              const RealD _csw_t,
                                                              const RealD _cF,
@@ -64,8 +63,6 @@ CompactWilsonExpCloverFermion<Impl>::CompactWilsonExpCloverFermion(GaugeField& _
   csw_t *= 0.5;
   if (clover_anisotropy.isAnisotropic)
     csw_r /= clover_anisotropy.xi_0;
-
-  twmass = _twmass;
 
   ImportGauge(_Umu);
   if (open_boundaries)
@@ -327,60 +324,27 @@ void CompactWilsonExpCloverFermion<Impl>::ImportGauge(const GaugeField& _Umu) {
   double t4 = usecond();
   CompactHelpers::ConvertLayout(TmpOriginal, Diagonal, Triangle);
 
-  // Possible modify the boundary values
-  double t5 = usecond();
-  if(open_boundaries) CompactHelpers::ModifyBoundaries(Diagonal, Triangle, csw_t, cF, this->diag_mass);
-
   // Exponentiate
-
-  double t6 = usecond();
+  double t5 = usecond();
   CompactHelpers::Exponentiate(Diagonal,
                                Triangle,
                                DiagonalExp,
                                TriangleExp,
                                1.0 / this->diag_mass);
 
-  // ToDo: Does this work?
   DiagonalExp *= this->diag_mass;
   TriangleExp *= this->diag_mass;
 
-  // Add twisted mass
-  typedef typename SiteCloverDiagonal::scalar_object scalar_object_diagonal;
-
-  double t7 = usecond();
-  long lsites = DiagonalExp.Grid()->lSites();
-  autoView(T_v,  DiagonalExp,  CpuRead);
-  autoView(DiagonalExp_v, DiagonalExp, CpuWrite);
-
-  thread_for(site, lsites,
-  {
-    scalar_object_diagonal diagonal_src = Zero();
-    scalar_object_diagonal diagonal_dst = Zero();
-
-    Coordinate lcoor;
-    grid->LocalIndexToLocalCoor(site, lcoor);
-
-    peekLocalSite(diagonal_src, T_v, lcoor);
-    ComplexD sum;
-
-    for(int i = 0; i < 6; i++){
-      sum = static_cast<ComplexD>(TensorRemove(diagonal_src()(0)(i))) + timesI(static_cast<ComplexD>(twmass));
-      diagonal_dst()(0)(i) = sum;
-
-      sum = static_cast<ComplexD>(TensorRemove(diagonal_src()(1)(i))) - timesI(static_cast<ComplexD>(twmass));
-      diagonal_dst()(1)(i) = sum;
-    }
-
-   pokeLocalSite(diagonal_dst, DiagonalExp_v, lcoor);
-
-  });
+  // Possibly modify the boundary values
+  double t6 = usecond();
+  if(open_boundaries) CompactHelpers::ModifyBoundaries(DiagonalExp, TriangleExp, csw_t, cF, this->diag_mass);
 
   // Invert the clover term in the improved layout
-  double t8 = usecond();
+  double t7 = usecond();
   CompactHelpers::Invert(DiagonalExp, TriangleExp, DiagonalExpInv, TriangleExpInv);
 
   // Fill the remaining clover fields
-  double t9 = usecond();
+  double t8 = usecond();
   pickCheckerboard(Even, DiagonalExpEven,    DiagonalExp);
   pickCheckerboard(Even, TriangleExpEven,    TriangleExp);
   pickCheckerboard(Odd,  DiagonalExpOdd,     DiagonalExp);
@@ -391,22 +355,19 @@ void CompactWilsonExpCloverFermion<Impl>::ImportGauge(const GaugeField& _Umu) {
   pickCheckerboard(Odd,  TriangleExpInvOdd,  TriangleExpInv);
 
   // Report timings
-  double t10 = usecond();
-#if 0
-  std::cout << GridLogMessage << "CompactWilsonExpCloverFermion::ImportGauge timings:"
-            << " WilsonFermion::Importgauge = " << (t1 - t0) / 1e6
-            << ", allocations = "               << (t2 - t1) / 1e6
-            << ", field strength = "            << (t3 - t2) / 1e6
-            << ", fill clover = "               << (t4 - t3) / 1e6
-            << ", convert = "                   << (t5 - t4) / 1e6
-            << ", boundaries = "                << (t6 - t5) / 1e6
-			<< ", exponentiation = "                << (t7 - t6) / 1e6
-			<< ", twisted mass = "                << (t8 - t7) / 1e6
-            << ", inversions = "                << (t9 - t8) / 1e6
-            << ", pick cbs = "                  << (t10 - t9) / 1e6
-            << ", total = "                     << (t10 - t0) / 1e6
-            << std::endl;
-#endif
+  double t9 = usecond();
+
+  std::cout << GridLogDebug << "CompactWilsonExpCloverFermion::ImportGauge timings:" << std::endl;
+  std::cout << GridLogDebug << " WilsonFermion::Importgauge = " << (t1 - t0) / 1e6 << std::endl;
+  std::cout << GridLogDebug << "allocations = "               << (t2 - t1) / 1e6 << std::endl;
+  std::cout << GridLogDebug << "field strength = "            << (t3 - t2) / 1e6 << std::endl;
+  std::cout << GridLogDebug << "fill clover = "               << (t4 - t3) / 1e6 << std::endl;
+  std::cout << GridLogDebug << "convert = "                   << (t5 - t4) / 1e6 << std::endl;
+  std::cout << GridLogDebug << "exponentiation = "            << (t6 - t5) / 1e6 << std::endl;
+  std::cout << GridLogDebug << "boundaries = "                << (t7 - t6) / 1e6 << std::endl;
+	std::cout << GridLogDebug << "inversions = "                << (t8 - t7) / 1e6 << std::endl;
+  std::cout << GridLogDebug << "pick cbs = "                  << (t9 - t8) / 1e6 << std::endl;
+  std::cout << GridLogDebug << "total = "                     << (t9 - t0) / 1e6 << std::endl;
 }
 
 NAMESPACE_END(Grid);

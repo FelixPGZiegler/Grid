@@ -165,8 +165,8 @@ void WilsonExpCloverFermion<Impl>::ImportGauge(const GaugeField &_Umu)
   // Add the twisted mass
   CloverFieldType T(CloverTerm.Grid());
   T = Zero();
-  autoView(T_v,T,AcceleratorWrite);
-  accelerator_for(i, CloverTerm.Grid()->oSites(),1,
+  autoView(T_v,T,CpuWrite);
+  thread_for(i, CloverTerm.Grid()->oSites(),
   {
     T_v[i]()(0, 0) = +twmass;
     T_v[i]()(1, 1) = +twmass;
