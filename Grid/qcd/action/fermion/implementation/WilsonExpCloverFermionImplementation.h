@@ -2,12 +2,13 @@
 
     Grid physics library, www.github.com/paboyle/Grid
 
-    Source file: ./lib/qcd/action/fermion/WilsonExpCloverFermion.cc
+    Source file: ./lib/qcd/action/fermion/WilsonExpCloverFermionImplementation.h
 
-    Copyright (C) 2017
+    Copyright (C) 2017 - 2022
 
     Author: paboyle <paboyle@ph.ed.ac.uk>
     Author: Guido Cossu <guido.cossu@ed.ac.uk>
+    Author: Daniel Richtmann <daniel.richtmann@gmail.com>
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -32,6 +33,49 @@
 #include <Grid/qcd/action/fermion/WilsonExpCloverFermion.h>
 
 NAMESPACE_BEGIN(Grid);
+
+template<class Impl>
+WilsonExpCloverFermion<Impl>::WilsonExpCloverFermion(GaugeField&                         _Umu,
+                                               GridCartesian&                      Fgrid,
+                                               GridRedBlackCartesian&              Hgrid,
+                                               const RealD                         _mass,
+                                               const RealD                         _twmass,
+                                               const RealD                         _csw_r,
+                                               const RealD                         _csw_t,
+                                               const WilsonAnisotropyCoefficients& clover_anisotropy,
+                                               const ImplParams&                   impl_p)
+  : WilsonFermion<Impl>(_Umu, Fgrid, Hgrid, _mass, impl_p, clover_anisotropy)
+  , CloverTerm(&Fgrid)
+  , ExpCloverTerm(&Fgrid)
+  , ExpCloverTermInv(&Fgrid)
+  , ExpCloverTermEven(&Hgrid)
+  , ExpCloverTermOdd(&Hgrid)
+  , ExpCloverTermInvEven(&Hgrid)
+  , ExpCloverTermInvOdd(&Hgrid)
+  , ExpCloverTermDagEven(&Hgrid)
+  , ExpCloverTermDagOdd(&Hgrid)
+  , ExpCloverTermInvDagEven(&Hgrid)
+  , ExpCloverTermInvDagOdd(&Hgrid) {
+  assert(Nd == 4); // require 4 dimensions
+
+  if(clover_anisotropy.isAnisotropic) {
+    csw_r     = _csw_r * 0.5 / clover_anisotropy.xi_0;
+    diag_mass = _mass + 1.0 + (Nd - 1) * (clover_anisotropy.nu / clover_anisotropy.xi_0);
+  } else {
+    csw_r     = _csw_r * 0.5;
+    diag_mass = 4.0 + _mass;
+  }
+  csw_t = _csw_t * 0.5;
+
+  if(csw_r == 0)
+    std::cout << GridLogWarning << "Initializing WilsonCloverFermion with csw_r = 0" << std::endl;
+  if(csw_t == 0)
+    std::cout << GridLogWarning << "Initializing WilsonCloverFermion with csw_t = 0" << std::endl;
+
+  twmass = _twmass;
+
+  ImportGauge(_Umu);
+}
 
 // *NOT* EO
 template <class Impl>
@@ -67,10 +111,13 @@ void WilsonExpCloverFermion<Impl>::Mdag(const FermionField &in, FermionField &ou
 template <class Impl>
 void WilsonExpCloverFermion<Impl>::ImportGauge(const GaugeField &_Umu)
 {
+  double t0 = usecond();
   WilsonFermion<Impl>::ImportGauge(_Umu);
+  double t1 = usecond();
   GridBase *grid = _Umu.Grid();
   typename Impl::GaugeLinkField Bx(grid), By(grid), Bz(grid), Ex(grid), Ey(grid), Ez(grid);
 
+  double t2 = usecond();
   // Compute the field strength terms mu>nu
   WilsonLoops<Impl>::FieldStrength(Bx, _Umu, Zdir, Ydir);
   WilsonLoops<Impl>::FieldStrength(By, _Umu, Zdir, Xdir);
@@ -79,21 +126,23 @@ void WilsonExpCloverFermion<Impl>::ImportGauge(const GaugeField &_Umu)
   WilsonLoops<Impl>::FieldStrength(Ey, _Umu, Tdir, Ydir);
   WilsonLoops<Impl>::FieldStrength(Ez, _Umu, Tdir, Zdir);
 
+  double t3 = usecond();
   // Compute the Clover Operator acting on Colour and Spin
   // multiply here by the clover coefficients for the anisotropy
-  CloverTerm  = fillCloverYZ(Bx) * csw_r;
-  CloverTerm += fillCloverXZ(By) * csw_r;
-  CloverTerm += fillCloverXY(Bz) * csw_r;
-  CloverTerm += fillCloverXT(Ex) * csw_t;
-  CloverTerm += fillCloverYT(Ey) * csw_t;
-  CloverTerm += fillCloverZT(Ez) * csw_t;
+  CloverTerm  = Helpers::fillCloverYZ(Bx) * csw_r;
+  CloverTerm += Helpers::fillCloverXZ(By) * csw_r;
+  CloverTerm += Helpers::fillCloverXY(Bz) * csw_r;
+  CloverTerm += Helpers::fillCloverXT(Ex) * csw_t;
+  CloverTerm += Helpers::fillCloverYT(Ey) * csw_t;
+  CloverTerm += Helpers::fillCloverZT(Ez) * csw_t;
 
-  //
-  // Make Exp Clover and inverse
-  //
+  double t4 = usecond();
 
   int lvol = _Umu.Grid()->lSites();
   int DimRep = Impl::Dimension;
+
+  // Exponentiate
+
   {
 
    typedef iMatrix<ComplexD,6> mat;
@@ -102,59 +151,59 @@ void WilsonExpCloverFermion<Impl>::ImportGauge(const GaugeField &_Umu)
    autoView(CTExpv,ExpCloverTerm,CpuWrite);
 
    thread_for(site, lvol, {
-  	Coordinate lcoor;
-  	grid->LocalIndexToLocalCoor(site, lcoor);
+    Coordinate lcoor;
+    grid->LocalIndexToLocalCoor(site, lcoor);
 
-  	mat srcCloverOpUL(0.0); // upper left block
-  	mat srcCloverOpLR(0.0); // lower right block
-  	mat ExpCloverOp;
+    mat srcCloverOpUL(0.0); // upper left block
+    mat srcCloverOpLR(0.0); // lower right block
+    mat ExpCloverOp;
 
-  	typename SiteCloverType::scalar_object Qx = Zero(), Qxexp = Zero();
+    typename SiteClover::scalar_object Qx = Zero(), Qxexp = Zero();
 
-  	peekLocalSite(Qx, CTv, lcoor);
+    peekLocalSite(Qx, CTv, lcoor);
 
-  	// exp(A)
+    // exp(A)
 
-  	//
-  	// upper left block
-  	//
+    //
+    // upper left block
+    //
 
-  	for (int j = 0; j < Ns/2; j++)
-  	 for (int k = 0; k < Ns/2; k++)
-  	  for (int a = 0; a < DimRep; a++)
-  	   for (int b = 0; b < DimRep; b++){
-  	    auto zz =  Qx()(j, k)(a, b);
-  	    srcCloverOpUL(a + j * DimRep, b + k * DimRep) = std::complex<double>(zz);
-  	   }
+    for (int j = 0; j < Ns/2; j++)
+     for (int k = 0; k < Ns/2; k++)
+      for (int a = 0; a < DimRep; a++)
+       for (int b = 0; b < DimRep; b++){
+        auto zz =  Qx()(j, k)(a, b);
+        srcCloverOpUL(a + j * DimRep, b + k * DimRep) = std::complex<double>(zz);
+       }
 
-  	ExpCloverOp = ExponentiateInternal(srcCloverOpUL,1.0/(diag_mass));
+    ExpCloverOp = Exponentiate(srcCloverOpUL,1.0/(diag_mass));
 
-  	for (int j = 0; j < Ns/2; j++)
-  	 for (int k = 0; k < Ns/2; k++)
-  	  for (int a = 0; a < DimRep; a++)
-  	   for (int b = 0; b < DimRep; b++)
-  	    Qxexp()(j, k)(a, b) = ExpCloverOp(a + j * DimRep, b + k * DimRep);
+    for (int j = 0; j < Ns/2; j++)
+     for (int k = 0; k < Ns/2; k++)
+      for (int a = 0; a < DimRep; a++)
+       for (int b = 0; b < DimRep; b++)
+        Qxexp()(j, k)(a, b) = ExpCloverOp(a + j * DimRep, b + k * DimRep);
 
-  	//
+    //
     // lower right block
-  	//
+    //
 
-  	for (int j = 0; j < Ns/2; j++)
-  	 for (int k = 0; k < Ns/2; k++)
-  	  for (int a = 0; a < DimRep; a++)
-  	   for (int b = 0; b < DimRep; b++){
-  	  	auto zz =  Qx()(j+Ns/2, k+Ns/2)(a, b);
-  	  	srcCloverOpLR(a + j * DimRep, b + k * DimRep) = std::complex<double>(zz);
-  	   }
+    for (int j = 0; j < Ns/2; j++)
+     for (int k = 0; k < Ns/2; k++)
+      for (int a = 0; a < DimRep; a++)
+       for (int b = 0; b < DimRep; b++){
+        auto zz =  Qx()(j+Ns/2, k+Ns/2)(a, b);
+        srcCloverOpLR(a + j * DimRep, b + k * DimRep) = std::complex<double>(zz);
+       }
 
 
-  	ExpCloverOp = ExponentiateInternal(srcCloverOpLR,1.0/(diag_mass));
+    ExpCloverOp = Exponentiate(srcCloverOpLR,1.0/(diag_mass));
 
-  	for (int j = 0; j < Ns/2; j++)
-  	 for (int k = 0; k < Ns/2; k++)
-  	  for (int a = 0; a < DimRep; a++)
-  	   for (int b = 0; b < DimRep; b++)
-  	    Qxexp()(j+Ns/2, k+Ns/2)(a, b) = ExpCloverOp(a + j * DimRep, b + k * DimRep);
+    for (int j = 0; j < Ns/2; j++)
+     for (int k = 0; k < Ns/2; k++)
+      for (int a = 0; a < DimRep; a++)
+       for (int b = 0; b < DimRep; b++)
+        Qxexp()(j+Ns/2, k+Ns/2)(a, b) = ExpCloverOp(a + j * DimRep, b + k * DimRep);
 
     // Now that the full 12x12 block is filled do poke!
     pokeLocalSite(Qxexp, CTExpv, lcoor);
@@ -162,8 +211,8 @@ void WilsonExpCloverFermion<Impl>::ImportGauge(const GaugeField &_Umu)
   }
   ExpCloverTerm *= diag_mass;
 
-  // Add the twisted mass
-  CloverFieldType T(CloverTerm.Grid());
+  // Add twisted mass
+  CloverField T(CloverTerm.Grid());
   T = Zero();
   autoView(T_v,T,CpuWrite);
   thread_for(i, CloverTerm.Grid()->oSites(),
@@ -176,6 +225,7 @@ void WilsonExpCloverFermion<Impl>::ImportGauge(const GaugeField &_Umu)
   T = timesI(T);
   ExpCloverTerm += T;
 
+  double t5 = usecond();
   {
     autoView(CTExpv,ExpCloverTerm,CpuRead);
     autoView(CTExpIv,ExpCloverTermInv,CpuWrite);
@@ -184,7 +234,7 @@ void WilsonExpCloverFermion<Impl>::ImportGauge(const GaugeField &_Umu)
       grid->LocalIndexToLocalCoor(site, lcoor);
       Eigen::MatrixXcd EigenCloverOp = Eigen::MatrixXcd::Zero(Ns/2 * DimRep, Ns/2 * DimRep);
       Eigen::MatrixXcd EigenInvCloverOp = Eigen::MatrixXcd::Zero(Ns/2 * DimRep, Ns/2 * DimRep);
-      typename SiteCloverType::scalar_object Qx = Zero(), Qxinv = Zero();
+      typename SiteClover::scalar_object Qx = Zero(), Qxinv = Zero();
       peekLocalSite(Qx, CTExpv, lcoor);
 
       //
@@ -232,7 +282,7 @@ void WilsonExpCloverFermion<Impl>::ImportGauge(const GaugeField &_Umu)
     });
   }
 
-
+  double t6 = usecond();
   // Separate the even and odd parts
   pickCheckerboard(Even, ExpCloverTermEven, ExpCloverTerm);
   pickCheckerboard(Odd, ExpCloverTermOdd, ExpCloverTerm);
@@ -245,6 +295,20 @@ void WilsonExpCloverFermion<Impl>::ImportGauge(const GaugeField &_Umu)
 
   pickCheckerboard(Even, ExpCloverTermInvDagEven, adj(ExpCloverTermInv));
   pickCheckerboard(Odd, ExpCloverTermInvDagOdd, adj(ExpCloverTermInv));
+  double t7 = usecond();
+
+#if 0
+  std::cout << GridLogMessage << "WilsonCloverFermion::ImportGauge timings:"
+            << " WilsonFermion::Importgauge = " << (t1 - t0) / 1e6
+            << ", allocations = "               << (t2 - t1) / 1e6
+            << ", field strength = "            << (t3 - t2) / 1e6
+            << ", fill clover = "               << (t4 - t3) / 1e6
+            << ", exponentiation + twmass = "   << (t5 - t4) / 1e6
+            << ", inversions = "                << (t6 - t5) / 1e6
+            << ", pick cbs = "                  << (t7 - t6) / 1e6
+            << ", total = "                     << (t7 - t0) / 1e6
+            << std::endl;
+#endif
 }
 
 template <class Impl>
@@ -275,7 +339,7 @@ template <class Impl>
 void WilsonExpCloverFermion<Impl>::MooeeInternal(const FermionField &in, FermionField &out, int dag, int inv)
 {
   out.Checkerboard() = in.Checkerboard();
-  CloverFieldType *Clover;
+  CloverField *eClover;
   assert(in.Checkerboard() == Odd || in.Checkerboard() == Even);
 
   if (dag)
@@ -284,18 +348,18 @@ void WilsonExpCloverFermion<Impl>::MooeeInternal(const FermionField &in, Fermion
     {
       if (in.Checkerboard() == Odd)
       {
-        Clover = (inv) ? &ExpCloverTermInvDagOdd : &ExpCloverTermDagOdd;
+        eClover = (inv) ? &ExpCloverTermInvDagOdd : &ExpCloverTermDagOdd;
       }
       else
       {
-        Clover = (inv) ? &ExpCloverTermInvDagEven : &ExpCloverTermDagEven;
+        eClover = (inv) ? &ExpCloverTermInvDagEven : &ExpCloverTermDagEven;
       }
-      out = *Clover * in;
+      Helpers::multCloverField(out, *eClover, in);
     }
     else
     {
-      Clover = (inv) ? &ExpCloverTermInv : &ExpCloverTerm;
-      out = adj(*Clover) * in;
+      eClover = (inv) ? &ExpCloverTermInv : &ExpCloverTerm;
+      Helpers::multCloverField(out, *eClover, in); // don't bother with adj, hermitian anyway
     }
   }
   else
@@ -306,80 +370,29 @@ void WilsonExpCloverFermion<Impl>::MooeeInternal(const FermionField &in, Fermion
       if (in.Checkerboard() == Odd)
       {
         //  std::cout << "Calling clover term Odd" << std::endl;
-        Clover = (inv) ? &ExpCloverTermInvOdd : &ExpCloverTermOdd;
+        eClover = (inv) ? &ExpCloverTermInvOdd : &ExpCloverTermOdd;
       }
       else
       {
         //  std::cout << "Calling clover term Even" << std::endl;
-        Clover = (inv) ? &ExpCloverTermInvEven : &ExpCloverTermEven;
+        eClover = (inv) ? &ExpCloverTermInvEven : &ExpCloverTermEven;
       }
-      out = *Clover * in;
+      Helpers::multCloverField(out, *eClover, in);
       //  std::cout << GridLogMessage << "*Clover.Checkerboard() "  << (*Clover).Checkerboard() << std::endl;
     }
     else
     {
-      Clover = (inv) ? &ExpCloverTermInv : &ExpCloverTerm;
-      out = *Clover * in;
+      eClover = (inv) ? &ExpCloverTermInv : &ExpCloverTerm;
+      Helpers::multCloverField(out, *eClover, in);
     }
   }
-
 } // MooeeInternal
 
+// Derivative parts unpreconditioned pseudofermions
 template <class Impl>
-iMatrix<ComplexD,6> WilsonExpCloverFermion<Impl>::ExponentiateInternal(const iMatrix<ComplexD,6> &arg, const RealD& alpha)
+void WilsonExpCloverFermion<Impl>::MDeriv(GaugeField &force, const FermionField &X, const FermionField &Y, int dag)
 {
-	typedef iMatrix<ComplexD,6> mat;
-	int Niter = DEFAULT_MAT_EXP_CLOVER;
-
-	RealD qn[6];
-    RealD qnold[6];
-	RealD p[5];
-	RealD trA2, trA3, trA4;
-
-	mat A2, A3, A4, A5;
-	A2 = alpha * alpha * arg * arg;
-	A3 = alpha * arg * A2;
-	A4 = A2 * A2;
-	A5 = A2 * A3;
-
-	trA2 = toReal( trace(A2) );
-	trA3 = toReal( trace(A3) );
-	trA4 = toReal( trace(A4));
-
-	p[0] = toReal( trace(A3 * A3)) / 6.0 - 0.125 * trA4 * trA2 - trA3 * trA3 / 18.0 + trA2 * trA2 * trA2/ 48.0;
-	p[1] = toReal( trace(A5)) / 5.0 - trA3 * trA2 / 6.0;
-	p[2] = toReal( trace(A4)) / 4.0 - 0.125 * trA2 * trA2;
-	p[3] = trA3 / 3.0;
-	p[4] = 0.5 * trA2;
-
-	qnold[0] = cN[Niter];
-	qnold[1] = 0.0;
-	qnold[2] = 0.0;
-	qnold[3] = 0.0;
-	qnold[4] = 0.0;
-	qnold[5] = 0.0;
-
-	for(int i = Niter-1; i >= 0; i--)
-	{
-	 qn[0] = p[0] * qnold[5] + cN[i];
-     qn[1] = p[1] * qnold[5] + qnold[0];
-	 qn[2] = p[2] * qnold[5] + qnold[1];
-	 qn[3] = p[3] * qnold[5] + qnold[2];
-	 qn[4] = p[4] * qnold[5] + qnold[3];
-	 qn[5] = qnold[4];
-
-	 qnold[0] = qn[0];
-	 qnold[1] = qn[1];
-	 qnold[2] = qn[2];
-	 qnold[3] = qn[3];
-	 qnold[4] = qn[4];
-	 qnold[5] = qn[5];
-	}
-
-	mat unit(1.0);
-
-	return (qn[0] * unit + qn[1] * alpha * arg + qn[2] * A2 + qn[3] * A3 + qn[4] * A4 + qn[5] * A5);
-
+  assert(0);
 }
 
 // Derivative parts
