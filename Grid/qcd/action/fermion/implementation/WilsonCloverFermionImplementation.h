@@ -131,7 +131,7 @@ void WilsonCloverFermion<Impl, CloverHelpers>::ImportGauge(const GaugeField &_Um
   CloverTerm += Helpers::fillCloverXT(Ex) * csw_t;
   CloverTerm += Helpers::fillCloverYT(Ey) * csw_t;
   CloverTerm += Helpers::fillCloverZT(Ez) * csw_t;
-   
+
   double t4 = usecond();
   CloverHelpers::Instantiate(CloverTerm, CloverTermInv, csw_t, this->diag_mass);
 
@@ -263,9 +263,46 @@ void WilsonCloverFermion<Impl, CloverHelpers>::MDeriv(GaugeField &force, const F
   ///////////////////////////////////////////////////////////
   // Clover term derivative
   ///////////////////////////////////////////////////////////
+  #ifdef HIGHER_REP_CLOVER_FIX
+
+  std::vector<Complex> CFCoeff(96,0.0);
+
+  Complex iu(0.0,1.0);
+
+  CFCoeff = {-iu,iu,-iu,iu,0.0,0.0,0.0,0.0,
+             0.0,0.0,0.0,0.0,-1.0,1.0,-1.0,1.0,
+             0.0,0.0,0.0,0.0,iu,iu,-iu,-iu,
+             iu,-iu,iu,-iu,0.0,0.0,0.0,0.0,
+             0.0,0.0,0.0,0.0,-iu,-iu,-iu,-iu,
+             0.0,0.0,0.0,0.0,-1.0,1.0,1.0,-1.0,
+             0.0,0.0,0.0,0.0,1.0,-1.0,1.0,-1.0,
+             0.0,0.0,0.0,0.0,iu,iu,iu,iu,
+             iu,-iu,-iu,iu,0.0,0.0,0.0,0.0,
+             0.0,0.0,0.0,0.0,-iu,-iu,iu,iu,
+             0.0,0.0,0.0,0.0,1.0,-1.0,-1.0,1.0,
+             -iu,iu,iu,-iu,0.0,0.0,0.0,0.0};
+
+  std::vector<GaugeLinkField> V(8,X.Grid());
+
+  {
+    int xy_table[8][2] = {{0,0},{1,1},{2,2},{3,3},{1,0},{0,1},{3,2},{2,3}};
+    const int Nsimd = SiteSpinor::Nsimd();
+    autoView( X_v , X, AcceleratorRead);
+    autoView( Y_v , Y, AcceleratorRead);
+    for(int write_counter = 0; write_counter < 8; write_counter++)
+    {
+      autoView(mat_v,V[write_counter],AcceleratorWrite);
+      accelerator_for(sss,X.Grid()->oSites(),Nsimd,{
+          auto bb = coalescedRead(X_v[sss]()(xy_table[write_counter][0]) ); //colour vector
+          auto aa = coalescedRead(Y_v[sss]()(xy_table[write_counter][1]) );
+          auto op = outerProduct(bb,aa);
+          coalescedWrite(mat_v[sss]()(), op);
+        });
+    }
+  }
+  #else
   Impl::outerProductImpl(Lambda, X, Y);
   //std::cout << "Lambda:" << Lambda << std::endl;
-
   Gamma::Algebra sigma[] = {
       Gamma::Algebra::SigmaXY,
       Gamma::Algebra::SigmaXZ,
@@ -279,7 +316,7 @@ void WilsonCloverFermion<Impl, CloverHelpers>::MDeriv(GaugeField &force, const F
       Gamma::Algebra::MinusSigmaXT,
       Gamma::Algebra::MinusSigmaYT,
       Gamma::Algebra::MinusSigmaZT};
-
+  #endif
   /*
     sigma_{\mu \nu}=
     | 0         sigma[0]  sigma[1]  sigma[2] |
@@ -307,8 +344,17 @@ void WilsonCloverFermion<Impl, CloverHelpers>::MDeriv(GaugeField &force, const F
       {
         factor = 2.0 * csw_r;
       }
+      #ifdef HIGHER_REP_CLOVER_FIX
+      lambda = Zero();
+      for(int elem = 0; elem < 8; elem++)
+      {
+        lambda = lambda + (CFCoeff[count*8+elem] * V[elem]);
+        //lambda = V[elem];
+      }
+      #else
       PropagatorField Slambda = Gamma(sigma[count]) * Lambda; // sigma checked
       Impl::TraceSpinImpl(lambda, Slambda);                   // traceSpin ok
+      #endif
       force_mu -= factor*CloverHelpers::Cmunu(U, lambda, mu, nu);                   // checked
       count++;
     }
