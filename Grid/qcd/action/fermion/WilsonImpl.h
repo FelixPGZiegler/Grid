@@ -171,6 +171,33 @@ public:
   }
 
 inline void InsertForce4D(GaugeField &mat, FermionField &Btilde, FermionField &A,int mu){
+#ifdef OUTER_PRODUCT_FIX
+{
+  std::vector<GaugeLinkField> op(Ns+1,mat.Grid());
+  const int Nsimd = SiteSpinor::Nsimd();
+  op[Ns] = Zero();
+  autoView( Btilde_v , Btilde, AcceleratorRead);
+  autoView( A_v , A, AcceleratorRead);
+
+  for(int spn=0;spn<Ns;spn++){ //sum over spin
+  autoView( op_v , op[spn], AcceleratorWrite);
+  accelerator_for(sss,mat.Grid()->oSites(),Nsimd,{
+    for(int ic = 0; ic < Dimension; ic++)
+    {
+        for(int jc = 0; jc < Dimension; jc++)
+        {
+            auto bb = coalescedRead(Btilde_v[sss]()(spn)(ic) ); //color vector
+            auto aa = coalescedRead(A_v[sss]()(spn)(jc) );
+            auto tmp = outerProduct(bb,aa);
+            coalescedWrite(op_v[sss]()()(ic,jc), tmp);
+        }
+    }
+    });
+    op[Ns] += op[spn];
+  }
+  PokeIndex<LorentzIndex>(mat,op[Ns],mu);
+}
+#else
 #ifdef HIGHER_REP_CLOVER_FIX
 {
     autoView( mat_v , mat, AcceleratorWrite);
@@ -197,11 +224,15 @@ inline void InsertForce4D(GaugeField &mat, FermionField &Btilde, FermionField &A
     PokeIndex<LorentzIndex>(mat,link,mu);
 }
 #endif
+#endif
 }
 
+#ifdef HIGHER_REP_CLOVER_FIX
+#else
     inline void outerProductImpl(PropagatorField &mat, const FermionField &B, const FermionField &A){
       mat = outerProduct(B,A);
     }
+#endif
 
     inline void TraceSpinImpl(GaugeLinkField &mat, PropagatorField&P) {
       mat = TraceIndex<SpinIndex>(P);
