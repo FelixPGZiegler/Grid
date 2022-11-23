@@ -243,7 +243,31 @@ public:
     }
 
     inline void TraceSpinImpl(GaugeLinkField &mat, PropagatorField&P) {
+      #ifdef OUTER_PRODUCT_FIX
+      {
+        autoView( mat_v , mat, AcceleratorWrite);
+        autoView( P_v , P, AcceleratorRead);
+        const int Nsimd = SiteSpinor::Nsimd();
+        accelerator_for(sss,mat.Grid()->oSites(),Nsimd,{
+        for(int ic = 0; ic < Dimension; ic++)
+        {
+          for(int jc = 0; jc < Dimension; jc++)
+          {
+              typedef decltype(coalescedRead(P_v[sss]()(0,0)(ic,jc))) tmpType;
+              tmpType tmpentry;
+              zeroit(tmpentry);
+              for(int spn=0;spn<Ns;spn++){ //loop over spin
+                auto bb = coalescedRead(P_v[sss]()(spn,spn)(ic,jc) ); //color entry
+                tmpentry = tmpentry + bb;
+              }
+              coalescedWrite(mat_v[sss]()()(ic,jc), tmpentry);
+            }
+          }
+        });
+      }
+      #else
       mat = TraceIndex<SpinIndex>(P);
+      #endif
     }
 
     inline void extractLinkField(std::vector<GaugeLinkField> &mat, DoubledGaugeField &Uds)
