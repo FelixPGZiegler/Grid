@@ -110,12 +110,26 @@ public:
     autoView( out_v, out, AcceleratorWrite);
     autoView( phi_v, phi, AcceleratorRead);
     autoView( Umu_v, Umu, AcceleratorRead);
+#ifdef OUTER_PRODUCT_FIX
+{
+  accelerator_for(sss,out.Grid()->oSites(),Nsimd,{
+  for(int ic = 0; ic < Dimension; ic++)
+  {
+      auto urow = coalescedRead(Umu_v[sss]()()(ic));
+      auto phitmp = coalescedRead(phi_v(sss));
+      auto tmp = innerProduct(urow,phitmp);
+  }
+  coalescedWrite(out_v[sss],tmp);
+  });
+}
+#else
     typedef decltype(coalescedRead(out_v[0]))   calcSpinor;
     accelerator_for(sss,out.Grid()->oSites(),Nsimd,{
 	calcSpinor tmp;
 	multLink(tmp,Umu_v[sss],phi_v(sss),mu);
 	coalescedWrite(out_v[sss],tmp);
     });
+  #endif
   }
 
   template <class ref>
