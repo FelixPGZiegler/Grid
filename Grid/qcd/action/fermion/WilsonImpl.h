@@ -30,7 +30,7 @@ directory
 
 NAMESPACE_BEGIN(Grid);
 
-  
+
 /////////////////////////////////////////////////////////////////////////////
 // Single flavour four spinors with colour index
 /////////////////////////////////////////////////////////////////////////////
@@ -46,34 +46,34 @@ public:
 
   typedef PeriodicGaugeImpl<GaugeImplTypes<S, Dimension > > Gimpl;
   INHERIT_GIMPL_TYPES(Gimpl);
-      
+
   //Necessary?
   constexpr bool is_fundamental() const{return Dimension == Nc ? 1 : 0;}
-    
+
   typedef typename Options::_Coeff_t Coeff_t;
   typedef typename Options::template PrecisionMapper<Simd>::LowerPrecVector SimdL;
-      
+
   template <typename vtype> using iImplSpinor            = iScalar<iVector<iVector<vtype, Dimension>, Ns> >;
   template <typename vtype> using iImplPropagator        = iScalar<iMatrix<iMatrix<vtype, Dimension>, Ns> >;
   template <typename vtype> using iImplHalfSpinor        = iScalar<iVector<iVector<vtype, Dimension>, Nhs> >;
   template <typename vtype> using iImplHalfCommSpinor    = iScalar<iVector<iVector<vtype, Dimension>, Nhcs> >;
   template <typename vtype> using iImplDoubledGaugeField = iVector<iScalar<iMatrix<vtype, Dimension> >, Nds>;
-    
+
   typedef iImplSpinor<Simd>            SiteSpinor;
   typedef iImplPropagator<Simd>        SitePropagator;
   typedef iImplHalfSpinor<Simd>        SiteHalfSpinor;
   typedef iImplHalfCommSpinor<SimdL>   SiteHalfCommSpinor;
   typedef iImplDoubledGaugeField<Simd> SiteDoubledGaugeField;
-    
+
   typedef Lattice<SiteSpinor>            FermionField;
   typedef Lattice<SitePropagator>        PropagatorField;
   typedef Lattice<SiteDoubledGaugeField> DoubledGaugeField;
-    
+
   typedef WilsonCompressor<SiteHalfCommSpinor,SiteHalfSpinor, SiteSpinor> Compressor;
   typedef WilsonImplParams ImplParams;
   typedef WilsonStencil<SiteSpinor, SiteHalfSpinor,ImplParams> StencilImpl;
   typedef const typename StencilImpl::View_type StencilView;
-    
+
   ImplParams Params;
 
   WilsonImpl(const ImplParams &p = ImplParams()) : Params(p){
@@ -84,7 +84,7 @@ public:
   static accelerator_inline void multLink(_Spinor &phi,
 					  const SiteDoubledGaugeField &U,
 					  const _Spinor &chi,
-					  int mu) 
+					  int mu)
   {
     auto UU = coalescedRead(U(mu));
     mult(&phi(), &UU, &chi());
@@ -95,12 +95,12 @@ public:
 					  const _Spinor &chi,
 					  int mu,
 					  StencilEntry *SE,
-					  StencilView &St) 
+					  StencilView &St)
   {
     multLink(phi,U,chi,mu);
   }
 
-  template<class _SpinorField> 
+  template<class _SpinorField>
   inline void multLinkField(_SpinorField & out,
 			    const DoubledGaugeField &Umu,
 			    const _SpinorField & phi,
@@ -117,16 +117,16 @@ public:
 	coalescedWrite(out_v[sss],tmp);
     });
   }
-					   
+
   template <class ref>
-  static accelerator_inline void loadLinkElement(Simd &reg, ref &memory) 
+  static accelerator_inline void loadLinkElement(Simd &reg, ref &memory)
   {
     reg = memory;
   }
-      
+
   inline void DoubleStore(GridBase *GaugeGrid,
 			  DoubledGaugeField &Uds,
-			  const GaugeField &Umu) 
+			  const GaugeField &Umu)
   {
     typedef typename Simd::scalar_type scalar_type;
 
@@ -155,7 +155,7 @@ public:
 
 	// apply any twists
 	RealD theta = Params.twist_n_2pi_L[mu] * 2*M_PI / L;
-	if ( theta != 0.0) { 
+	if ( theta != 0.0) {
 	  scalar_type twphase(::cos(theta),::sin(theta));
 	  U = twphase*U;
 	  std::cout << GridLogMessage << " Twist ["<<mu<<"] "<< Params.twist_n_2pi_L[mu]<< " phase"<<phase <<std::endl;
@@ -165,25 +165,87 @@ public:
       PokeIndex<LorentzIndex>(Uds, tmp, mu);
 
       U = adj(Cshift(U, mu, -1));
-      U = where(coor == 0, conjugate(phase) * U, U); 
+      U = where(coor == 0, conjugate(phase) * U, U);
       PokeIndex<LorentzIndex>(Uds, U, mu + 4);
     }
   }
 
-  inline void InsertForce4D(GaugeField &mat, FermionField &Btilde, FermionField &A,int mu){
-    GaugeLinkField link(mat.Grid());
-    link = TraceIndex<SpinIndex>(outerProduct(Btilde,A)); 
-    PokeIndex<LorentzIndex>(mat,link,mu);
-  }   
-      
+  inline void InsertForce4D(GaugeField &mat, FermionField &Btilde, FermionField &A,int mu)
+  {
+  #ifdef OUTER_PRODUCT_FIX
+    {
+      const int Nsimd = SiteSpinor::Nsimd();
+
+      autoView( Btilde_v , Btilde, AcceleratorRead);
+      autoView( A_v , A, AcceleratorRead);
+      autoView( mat_v , mat, AcceleratorWrite);
+
+      accelerator_for(sss,mat.Grid()->oSites(),Nsimd,{
+
+          for(int ic = 0; ic < Dimension; ic++)
+          {
+            for(int jc = 0; jc < Dimension; jc++)
+            {
+              typedef decltype(outerProduct(coalescedRead(Btilde_v[sss]()(0)(ic)),coalescedRead(A_v[sss]()(0)(jc)) ) ) tmpType;
+              tmpType tmpentry;
+              zeroit(tmpentry);
+              for(int spn=0;spn<Ns;spn++){ //sum over spin
+              auto bb = coalescedRead(Btilde_v[sss]()(spn)(ic) ); //color vector
+              auto aa = coalescedRead(A_v[sss]()(spn)(jc) );
+              auto op = outerProduct(bb,aa);
+              tmpentry = tmpentry + op;
+            }
+            coalescedWrite(mat_v[sss](mu)()(ic,jc), tmpentry);
+          }
+        }
+        });
+    }
+  #else
+{
+  GaugeLinkField link(mat.Grid());
+  link = TraceIndex<SpinIndex>(outerProduct(Btilde,A));
+  PokeIndex<LorentzIndex>(mat,link,mu);
+}
+#endif
+}
+
     inline void outerProductImpl(PropagatorField &mat, const FermionField &B, const FermionField &A){
-      mat = outerProduct(B,A); 
-    }  
+      #ifdef OUTER_PRODUCT_FIX
+      {
+        const int Nsimd = SiteSpinor::Nsimd();
+        autoView( B_v , B, AcceleratorRead);
+        autoView( A_v , A, AcceleratorRead);
+        autoView( mat_v , mat, AcceleratorWrite);
+
+        accelerator_for(sss,mat.Grid()->oSites(),Nsimd,{
+        for(int spn=0;spn<Ns;spn++){ //loop over spin
+          for(int tpn=0;tpn<Ns;tpn++){ //loop over spin
+            for(int ic = 0; ic < Dimension; ic++)
+            {
+              for(int jc = 0; jc < Dimension; jc++)
+              {
+                auto bb  = coalescedRead(B_v[sss]()(spn)(ic) ); //color entry
+                auto aa  = coalescedRead(A_v[sss]()(tpn)(jc) );
+                auto tmp = outerProduct(bb,aa);
+                coalescedWrite(mat_v[sss]()(spn,tpn)(ic,jc), tmp);
+              }
+            }
+          }
+        }
+        });
+      }
+      #else
+      {
+        mat = outerProduct(B,A);
+      }
+      #endif
+
+    }
 
     inline void TraceSpinImpl(GaugeLinkField &mat, PropagatorField&P) {
-      mat = TraceIndex<SpinIndex>(P); 
+      mat = TraceIndex<SpinIndex>(P);
     }
-      
+
     inline void extractLinkField(std::vector<GaugeLinkField> &mat, DoubledGaugeField &Uds)
     {
       for (int mu = 0; mu < Nd; mu++)
@@ -192,10 +254,10 @@ public:
 
   inline void InsertForce5D(GaugeField &mat, FermionField &Btilde, FermionField &Atilde,int mu)
   {
-#undef USE_OLD_INSERT_FORCE    
+#undef USE_OLD_INSERT_FORCE
     int Ls=Btilde.Grid()->_fdimensions[0];
     autoView( mat_v , mat, AcceleratorWrite);
-#ifdef USE_OLD_INSERT_FORCE    
+#ifdef USE_OLD_INSERT_FORCE
     GaugeLinkField tmp(mat.Grid());
     tmp = Zero();
     {
@@ -213,6 +275,37 @@ public:
     }
     PokeIndex<LorentzIndex>(mat,tmp,mu);
 #else
+#ifdef OUTER_PRODUCT_FIX
+{
+  const int Nsimd = SiteSpinor::Nsimd();
+  autoView( Btilde_v , Btilde, AcceleratorRead);
+  autoView( Atilde_v , Atilde, AcceleratorRead);
+  accelerator_for(sss,mat.Grid()->oSites(),Nsimd,{
+  int sU=sss;
+
+    for(int ic = 0; ic < Dimension; ic++)
+    {
+      for(int jc = 0; jc < Dimension; jc++)
+      {
+        typedef decltype(outerProduct(coalescedRead(Btilde_v[sU]()(0)(ic)),coalescedRead(Atilde_v[sU]()(0)(jc)) ) ) tmpType;
+        tmpType tmpentry;
+        zeroit(tmpentry);
+        for(int s=0;s<Ls;s++){
+          int sF = s+Ls*sU;
+          for(int spn=0;spn<Ns;spn++){ //sum over spin
+            auto bb = coalescedRead(Btilde_v[sF]()(spn)(ic) ); //color entry
+            auto aa = coalescedRead(Atilde_v[sF]()(spn)(jc) );
+            auto op = outerProduct(bb,aa);
+            tmpentry = tmpentry + op;
+        }
+      }
+      coalescedWrite(mat_v[sU](mu)()(ic,jc), tmpentry);
+    }
+  }
+
+  });
+  }
+#else
     {
       const int Nsimd = SiteSpinor::Nsimd();
       autoView( Btilde_v , Btilde, AcceleratorRead);
@@ -221,7 +314,7 @@ public:
 	  int sU=sss;
   	  typedef decltype(coalescedRead(mat_v[sU](mu)() )) ColorMatrixType;
   	  ColorMatrixType sum;
-	  zeroit(sum);  
+	  zeroit(sum);
 	  for(int s=0;s<Ls;s++){
 	    int sF = s+Ls*sU;
   	    for(int spn=0;spn<Ns;spn++){ //sum over spin
@@ -234,7 +327,8 @@ public:
   	  coalescedWrite(mat_v[sU](mu)(), sum);
       });
     }
-#endif    
+#endif
+#endif
   }
 };
 
@@ -254,19 +348,18 @@ typedef WilsonImpl<vComplexD, FundamentalRepresentation, CoeffComplex > ZWilsonI
 //typedef WilsonImpl<vComplex,  FundamentalRepresentation, CoeffComplexHalfComms > ZWilsonImplRL; // Real.. whichever prec
 //typedef WilsonImpl<vComplexF, FundamentalRepresentation, CoeffComplexHalfComms > ZWilsonImplFH; // Float
 //typedef WilsonImpl<vComplexD, FundamentalRepresentation, CoeffComplexHalfComms > ZWilsonImplDF; // Double
- 
+
 typedef WilsonImpl<vComplex,  AdjointRepresentation, CoeffReal > WilsonAdjImplR;   // Real.. whichever prec
 typedef WilsonImpl<vComplexF, AdjointRepresentation, CoeffReal > WilsonAdjImplF;  // Float
 typedef WilsonImpl<vComplexD, AdjointRepresentation, CoeffReal > WilsonAdjImplD;  // Double
- 
+
 typedef WilsonImpl<vComplex,  TwoIndexSymmetricRepresentation, CoeffReal > WilsonTwoIndexSymmetricImplR;   // Real.. whichever prec
 typedef WilsonImpl<vComplexF, TwoIndexSymmetricRepresentation, CoeffReal > WilsonTwoIndexSymmetricImplF;  // Float
 typedef WilsonImpl<vComplexD, TwoIndexSymmetricRepresentation, CoeffReal > WilsonTwoIndexSymmetricImplD;  // Double
- 
+
 typedef WilsonImpl<vComplex,  TwoIndexAntiSymmetricRepresentation, CoeffReal > WilsonTwoIndexAntiSymmetricImplR;   // Real.. whichever prec
 typedef WilsonImpl<vComplexF, TwoIndexAntiSymmetricRepresentation, CoeffReal > WilsonTwoIndexAntiSymmetricImplF;  // Float
 typedef WilsonImpl<vComplexD, TwoIndexAntiSymmetricRepresentation, CoeffReal > WilsonTwoIndexAntiSymmetricImplD;  // Double
 
 
 NAMESPACE_END(Grid);
-
