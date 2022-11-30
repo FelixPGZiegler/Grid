@@ -58,7 +58,7 @@ public:
   template <typename vtype> using iImplHalfSpinor        = iScalar<iVector<iVector<vtype, Dimension>, Nhs> >;
   template <typename vtype> using iImplHalfCommSpinor    = iScalar<iVector<iVector<vtype, Dimension>, Nhcs> >;
   template <typename vtype> using iImplDoubledGaugeField = iVector<iScalar<iMatrix<vtype, Dimension> >, Nds>;
-
+  
   typedef iImplSpinor<Simd>            SiteSpinor;
   typedef iImplPropagator<Simd>        SitePropagator;
   typedef iImplHalfSpinor<Simd>        SiteHalfSpinor;
@@ -110,26 +110,12 @@ public:
     autoView( out_v, out, AcceleratorWrite);
     autoView( phi_v, phi, AcceleratorRead);
     autoView( Umu_v, Umu, AcceleratorRead);
-#ifdef OUTER_PRODUCT_FIX
-{
-  accelerator_for(sss,out.Grid()->oSites(),Nsimd,{
-  for(int ic = 0; ic < Dimension; ic++)
-  {
-      auto urow = coalescedRead(Umu_v[sss]()()(ic));
-      auto phitmp = coalescedRead(phi_v(sss));
-      auto tmp = innerProduct(urow,phitmp);
-  }
-  coalescedWrite(out_v[sss],tmp);
-  });
-}
-#else
     typedef decltype(coalescedRead(out_v[0]))   calcSpinor;
     accelerator_for(sss,out.Grid()->oSites(),Nsimd,{
 	calcSpinor tmp;
 	multLink(tmp,Umu_v[sss],phi_v(sss),mu);
 	coalescedWrite(out_v[sss],tmp);
     });
-  #endif
   }
 
   template <class ref>
@@ -186,7 +172,7 @@ public:
 
   inline void InsertForce4D(GaugeField &mat, FermionField &Btilde, FermionField &A,int mu)
   {
-  #ifdef OUTER_PRODUCT_FIX
+  #ifdef GRID_HIP 
     {
       const int Nsimd = SiteSpinor::Nsimd();
 
@@ -224,7 +210,7 @@ public:
 }
 
     inline void outerProductImpl(PropagatorField &mat, const FermionField &B, const FermionField &A){
-      #ifdef OUTER_PRODUCT_FIX
+      #ifdef GRID_HIP 
       {
         const int Nsimd = SiteSpinor::Nsimd();
         autoView( B_v , B, AcceleratorRead);
@@ -257,7 +243,7 @@ public:
     }
 
     inline void TraceSpinImpl(GaugeLinkField &mat, PropagatorField&P) {
-      #ifdef OUTER_PRODUCT_FIX
+      #ifdef GRID_HIP
       {
         autoView( mat_v , mat, AcceleratorWrite);
         autoView( P_v , P, AcceleratorRead);
@@ -287,7 +273,26 @@ public:
     inline void extractLinkField(std::vector<GaugeLinkField> &mat, DoubledGaugeField &Uds)
     {
       for (int mu = 0; mu < Nd; mu++)
-      mat[mu] = PeekIndex<LorentzIndex>(Uds, mu);
+      {
+	#ifndef GRID_HIP
+	mat[mu] = PeekIndex<LorentzIndex>(Uds, mu);
+	#else 
+	{
+		autoView( mat_v, mat[mu], AcceleratorWrite);
+		autoView( U_v, Uds, AcceleratorRead);
+		accelerator_for(ss, mat_v.size(), 1, {
+			for(int ic = 0; ic < Dimension; ic++)
+			{
+				for(int jc = 0; jc < Dimension; jc++)
+				{
+					auto tmp = coalescedRead(U_v[ss](mu)()(ic,jc));
+					coalescedWrite(mat_v[ss]()()(ic,jc),tmp);
+				}
+			}
+		});
+	}
+	#endif
+      }
     }
 
   inline void InsertForce5D(GaugeField &mat, FermionField &Btilde, FermionField &Atilde,int mu)
@@ -313,7 +318,7 @@ public:
     }
     PokeIndex<LorentzIndex>(mat,tmp,mu);
 #else
-#ifdef OUTER_PRODUCT_FIX
+#ifdef GRID_HIP 
 {
   const int Nsimd = SiteSpinor::Nsimd();
   autoView( Btilde_v , Btilde, AcceleratorRead);
